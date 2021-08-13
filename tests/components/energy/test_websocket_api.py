@@ -1,10 +1,12 @@
 """Test the Energy websocket API."""
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 
 from homeassistant.components.energy import data, is_configured
 from homeassistant.setup import async_setup_component
 
-from tests.common import flush_store
+from tests.common import MockConfigEntry, flush_store, mock_platform
 
 
 @pytest.fixture(autouse=True)
@@ -216,3 +218,50 @@ async def test_handle_duplicate_from_stat(hass, hass_ws_client) -> None:
     assert msg["id"] == 5
     assert not msg["success"]
     assert msg["error"]["code"] == "invalid_format"
+
+
+async def test_get_solar_forecast(hass, hass_ws_client) -> None:
+    """Test we get preferences."""
+    entry = MockConfigEntry(domain="some_domain")
+    entry.add_to_hass(hass)
+    hass.config.components.add("some_domain")
+    mock_platform(
+        hass,
+        "some_domain.energy",
+        Mock(
+            async_get_solar_forecast=AsyncMock(
+                return_value={
+                    "wh_hours": {
+                        "2021-06-27T13:00:00+00:00": 12,
+                        "2021-06-27T14:00:00+00:00": 8,
+                    }
+                }
+            )
+        ),
+    )
+
+    manager = await data.async_get_manager(hass)
+    manager.data = data.EnergyManager.default_preferences()
+    manager.data["energy_sources"].append(
+        {
+            "type": "solar",
+            "stat_energy_from": "my_solar_production",
+            "config_entry_solar_forecast": [entry.entry_id],
+        }
+    )
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 5, "type": "energy/solar_forecast"})
+
+    msg = await client.receive_json()
+
+    assert msg["id"] == 5
+    assert msg["success"]
+    assert msg["result"] == {
+        entry.entry_id: {
+            "wh_hours": {
+                "2021-06-27T13:00:00+00:00": 12,
+                "2021-06-27T14:00:00+00:00": 8,
+            }
+        }
+    }
